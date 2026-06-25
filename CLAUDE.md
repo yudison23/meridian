@@ -204,7 +204,7 @@ The management cycle is **mostly deterministic in JS, LLM only for the hard case
 ### The screening cycle (multi-stage pipeline)
 
 1. **Pre-checks**: `getMyPositions` + `getWalletBalances` in parallel. Skip if at `maxPositions` or `balance.sol < deployAmountSol + gasReserve`. Each skip writes a `decision-log` entry.
-2. **Top candidates**: `getTopCandidates({limit: 10})` — applies ALL hard filters (TVL, fee/TVL, volatility, organic, holders, mcap, bin step, launchpad allow/block, token age, cooldowns, base mints already in use, dev blocklist), optional indicator confirmation, **and** PVP-rival detection (default: warn; `blockPvpSymbols: true` → hard filter).
+2. **Top candidates**: `getTopCandidates({limit: 10})` — applies ALL hard filters (TVL, fee/TVL, volatility, organic, holders, mcap, bin step, launchpad allow/block, token age, base mints already in use, dev blocklist), optional indicator confirmation, **and** PVP-rival detection (default: warn; `blockPvpSymbols: true` → hard filter). Cooldowns (pool/token) are filtered too, but not unconditionally — see the cooldown-exception note below.
 3. **Sequential recon** with 150ms throttle (avoid 429s): `getActiveBin`, `checkSmartWalletsOnPool`, `getTokenNarrative`, `getTokenInfo` per candidate.
 4. **Hard filters after recon**: launchpad allow/block, `bot_holders_pct > maxBotHoldersPct`.
 5. **If 0 pass**: write `no_deploy` decision with `rejected[]` and return `⛔ NO DEPLOY` report.
@@ -257,6 +257,8 @@ auto-swap on close (executor.js:610)
 - `oorCooldownTriggerCount` (default 3) consecutive OOR closes → `oorCooldownHours` (default 12h) cooldown on **both pool and base mint**.
 - Optional repeat-deploy cooldown: `repeatDeployCooldownTriggerCount` (default 3) fee-generating deploys in a row → pool+token cooldown (configurable scope).
 - All checked by `isPoolOnCooldown` / `isBaseMintOnCooldown` in `getTopCandidates` and `deployPosition`.
+
+**Cooldown exception** (`tools/screening.js#getTopCandidates`): a pool/token that's on cooldown but otherwise passes every fundamental filter (TVL, fee/TVL, volatility, not already held) isn't dropped outright — it's held in `cooldownCandidates` and re-checked once normal (non-cooldown) candidates are filled up to `limit`. It's only let through if `config.indicators.enabled` **and** `confirmIndicatorPreset({..., requireAll: true})` confirms on *every* configured interval (stricter than the normal entry gate, which respects `requireAllIntervals` and may pass on just one). A disabled indicator system, an unavailable indicator API (`skipped: true`), or a non-unanimous result all deny the exception — cooldown is the default, the override is the rare case. Granted exceptions are tagged `pool.cooldown_override` / `cooldown_override_reason`, surfaced to the SCREENER LLM as a `⚠️ COOLDOWN OVERRIDE` line in the candidate block (`index.js` candidateBlocks), and recorded into the staged Darwinian signal snapshot so a deploy made this way is traceable later in `state.json`.
 
 ---
 
