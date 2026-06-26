@@ -208,7 +208,7 @@ The management cycle is **mostly deterministic in JS, LLM only for the hard case
 3. **Sequential recon** with 150ms throttle (avoid 429s): `getActiveBin`, `checkSmartWalletsOnPool`, `getTokenNarrative`, `getTokenInfo` per candidate.
 4. **Hard filters after recon**: launchpad allow/block, `bot_holders_pct > maxBotHoldersPct`.
 5. **If 0 pass**: write `no_deploy` decision with `rejected[]` and return `⛔ NO DEPLOY` report.
-6. **If 1 pass**: `getLoneCandidateSkipReason()` (smart-wallet absence, no narrative, PVP conflict, etc.) — if skipped, write `no_deploy` decision.
+6. **If 1 pass**: `getLoneCandidateSkipReason()` evaluates conviction. A solo deploy passes if: (a) **strong narrative** OR (b) **high Degen Score** (≥50, default). Smart wallets are now a confidence boost, not a gate — absence alone doesn't block. PVP conflict still blocks unless degen is strong. If skipped, write `no_deploy` decision.
 7. **Stage signals** for Darwinian attribution.
 8. **Compact candidate blocks** built in `index.js:543`.
 9. **LLM** gets the blocks + active strategy + balance + computed deploy amount + bins_below formula. The LLM is *forced* via `tool_choice: "required"` on step 0.
@@ -245,6 +245,7 @@ auto-swap on close (executor.js:610)
    ├─ only if !skip_swap && result.base_mint
    ├─ get wallet balance, find base token
    ├─ if usd >= 0.10 → swapToken back to SOL
+   ├─ Jupiter failures retry 3x with exponential backoff — no stranded tokens
    └─ result.auto_swapped = true + auto_swap_note (so LLM doesn't double-swap)
 ```
 
@@ -403,7 +404,7 @@ Standalone process — `cd discord-listener && npm install && npm start`. Shares
 - **`get_wallet_positions` tool** is in `definitions.js` and wired in `executor.js`, but not in `MANAGER_TOOLS`/`SCREENER_TOOLS`. Only `INTENT_TOOLS.balance` / `INTENT_TOOLS.positions` expose it to GENERAL.
 - **Lazy SDK load** (`tools/dlmm.js:33`) — `@meteora-ag/dlmm` is dynamic-imported on first on-chain call to avoid CJS-import crash on Node 24 (the `postinstall` `patch-anchor.js` handles another piece of this). Don't `import` it eagerly at top of file.
 - **Position cache** (`_positionsCache` 5min TTL) — in single-process mode it's a perf win, but the cache is invalidated by `_positionsCacheAt = 0` after every deploy/close, and the executor's `deploy_position` safety check uses `force: true` for a fresh count.
-- **PnL sanity check** (`pnlSanityMaxDiffPct`, default 5%) — if reported vs derived pnl_pct differ by more than this, the LLM is told not to trust that tick. Implemented in `dlmm.js` getMyPositions and `state.js` updatePnlAndCheckExits.
+- **PnL sanity check** (`pnlSanityMaxDiffPct`, default 5%) — if reported vs derived pnl_pct differ by more than this, the LLM is told not to trust that tick. **FIXED:** was wrongly blocking exit rules (stop-loss, trailing-TP, OOR) on volatile pools — positions could sit past their rules. Now correctly limited to warning only; exits always trigger. Implemented in `dlmm.js` getMyPositions and `state.js` updatePnlAndCheckExits.
 - **DRY_RUN auto-skip SOL balance check** — `runSafetyChecks` for `deploy_position` only checks `balance.sol < amountY + gasReserve` if `DRY_RUN !== "true"`.
 - **HiveMind disable path is murky** — README says "there is currently no empty-string disable path" for HiveMind. `config.hiveMind.url/apiKey` fall back to defaults if blank. Set `pullMode: "manual"` to suppress auto-pull.
 - **Selfbot in `discord-listener/`** is a ToS gray area. Make sure operators know.
